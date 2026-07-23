@@ -1,0 +1,315 @@
+// SyncForge — Prisma schema
+// Design notes live in /docs/DATABASE_ERD.md
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Identity
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String? // null when the account only uses OAuth
+  name         String
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships     Membership[]
+  sessions        Session[]
+  oauthAccounts   OAuthAccount[]
+  assignedTasks   Task[]           @relation("TaskAssignee")
+  comments        Comment[]
+  documentEdits   DocumentVersion[]
+  notifications   Notification[]
+  auditLogs       AuditLog[]       @relation("AuditActor")
+  uploadedFiles   File[]
+  wsConnections   WebSocketConnection[]
+
+  @@index([email])
+}
+
+model OAuthAccount {
+  id             String @id @default(cuid())
+  userId         String
+  provider       String // "google" | "github" ...
+  providerUserId String
+  user           User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+}
+
+model Session {
+  id            String   @id @default(cuid())
+  userId        String
+  refreshToken  String   @unique
+  userAgent     String?
+  ipAddress     String?
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  revokedAt     DateTime?
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Organizations & RBAC
+// ─────────────────────────────────────────────────────────────
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+
+  memberships Membership[]
+  projects    Project[]
+  auditLogs   AuditLog[]
+  invitations Invitation[]
+}
+
+model Membership {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  role           Role     @default(MEMBER)
+  createdAt      DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId, role])
+}
+
+model Invitation {
+  id             String   @id @default(cuid())
+  organizationId String
+  email          String
+  role           Role     @default(MEMBER)
+  token          String   @unique
+  invitedById    String
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([email])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Projects & Tasks
+// ─────────────────────────────────────────────────────────────
+
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+  COMPLETED
+}
+
+model Project {
+  id             String        @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  status         ProjectStatus @default(ACTIVE)
+  deadline       DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tasks        Task[]
+  documents    Document[]
+  files        File[]
+
+  @@index([organizationId, status])
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  DONE
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Task {
+  id          String     @id @default(cuid())
+  projectId   String
+  title       String
+  description String?
+  status      TaskStatus @default(TODO)
+  priority    Priority   @default(MEDIUM)
+  assigneeId  String?
+  dueDate     DateTime?
+  position    Float      // fractional-index ordering within a column
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee User?     @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  labels   TaskLabel[]
+  comments Comment[]
+  files    File[]
+
+  @@index([projectId, status])
+  @@index([assigneeId])
+}
+
+model Label {
+  id    String @id @default(cuid())
+  name  String
+  color String
+  tasks TaskLabel[]
+}
+
+model TaskLabel {
+  taskId  String
+  labelId String
+  task    Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  label   Label @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, labelId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Documents
+// ─────────────────────────────────────────────────────────────
+
+model Document {
+  id            String   @id @default(cuid())
+  projectId     String
+  title         String
+  content       Json     // current snapshot
+  lockedById    String?
+  lockedAt      DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  project  Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versions DocumentVersion[]
+  comments Comment[]
+
+  @@index([projectId])
+}
+
+model DocumentVersion {
+  id         String   @id @default(cuid())
+  documentId String
+  content    Json
+  authorId   String
+  note       String?
+  createdAt  DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  author   User     @relation(fields: [authorId], references: [id])
+
+  @@index([documentId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Shared: comments, notifications, files, audit, realtime
+// ─────────────────────────────────────────────────────────────
+
+model Comment {
+  id         String   @id @default(cuid())
+  authorId   String
+  body       String
+  mentions   String[] // userIds mentioned via @
+  taskId     String?
+  documentId String?
+  createdAt  DateTime @default(now())
+
+  author   User      @relation(fields: [authorId], references: [id])
+  task     Task?     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  document Document? @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([documentId])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String // "task.assigned" | "mention" | "comment.created" ...
+  payload   Json
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+model File {
+  id         String   @id @default(cuid())
+  projectId  String?
+  taskId     String?
+  uploaderId String
+  filename   String
+  mimeType   String
+  sizeBytes  Int
+  storageKey String // path/key in the storage abstraction (local dir or S3-compatible bucket)
+  createdAt  DateTime @default(now())
+
+  project  Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task     Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploader User     @relation(fields: [uploaderId], references: [id])
+
+  @@index([projectId])
+  @@index([taskId])
+}
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  actorId        String
+  action         String // "member.role_changed", "task.deleted", ...
+  targetType     String
+  targetId       String
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor        User         @relation("AuditActor", fields: [actorId], references: [id])
+
+  @@index([organizationId, createdAt])
+}
+
+model WebSocketConnection {
+  id           String   @id @default(cuid())
+  userId       String
+  gatewayNode  String // which gateway instance holds the socket (for horizontal scale-out)
+  connectedAt  DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+  disconnectedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}

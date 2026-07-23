@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-forge-bg text-forge-text font-body antialiased;
+  }
+}
+
+@layer components {
+  .sf-card {
+    @apply bg-forge-surface border border-forge-border rounded-lg;
+  }
+  .sf-input {
+    @apply bg-forge-bg border border-forge-border rounded-md px-3 py-2 text-sm
+      placeholder:text-forge-muted focus:outline-none focus:ring-1 focus:ring-forge-ember;
+  }
+  .sf-btn-primary {
+    @apply bg-forge-ember text-forge-bg font-medium rounded-md px-4 py-2 text-sm
+      hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .sf-btn-ghost {
+    @apply text-forge-muted hover:text-forge-text text-sm transition;
+  }
+  .sf-label {
+    @apply font-display text-[11px] uppercase tracking-wider text-forge-muted;
+  }
+}
